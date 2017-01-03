@@ -427,7 +427,7 @@ class GTEST_API_ Test {
   Test();
 
   // Sets up the test fixture.
-  virtual void SetUp();
+  virtual void SetUp(const TestInfo* ti);
 
   // Tears down the test fixture.
   virtual void TearDown();
@@ -446,7 +446,7 @@ class GTEST_API_ Test {
   virtual void TestBody() = 0;
 
   // Sets up, executes, and tears down the test.
-  void Run();
+  void Run(const TestInfo* ti);
 
   // Deletes self.  We deliberately pick an unusual name for this
   // internal method to avoid clashing with names used in user TESTs.

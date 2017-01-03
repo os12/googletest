@@ -2224,7 +2224,7 @@ Test::~Test() {
 // Sets up the test fixture.
 //
 // A sub-class may override this.
-void Test::SetUp() {
+void Test::SetUp(const TestInfo*) {
 }
 
 // Tears down the test fixture.
@@ -2381,6 +2381,36 @@ GoogleTestFailureException::GoogleTestFailureException(
 // wrapper function for handling SEH exceptions.)
 template <class T, typename Result>
 Result HandleSehExceptionsInMethodIfSupported(
+    T *object, Result (T::*method)(const TestInfo *ti), const TestInfo *ti,
+    const char *location) {
+#if GTEST_HAS_SEH
+  __try {
+    return (object->*method)(ti);
+  } __except (internal::UnitTestOptions::GTestShouldProcessSEH(  // NOLINT
+      GetExceptionCode())) {
+    // We create the exception message on the heap because VC++ prohibits
+    // creation of objects with destructors on stack in functions using __try
+    // (see error C2712).
+    std::string* exception_message = FormatSehExceptionMessage(
+        GetExceptionCode(), location);
+    internal::ReportFailureInUnknownLocation(TestPartResult::kFatalFailure,
+                                             *exception_message);
+    delete exception_message;
+    return static_cast<Result>(0);
+  }
+#else
+  (void)location;
+  return (object->*method)();
+#endif  // GTEST_HAS_SEH
+}
+
+// Runs the given method and handles SEH exceptions it throws, when
+// SEH is supported; returns the 0-value for type Result in case of an
+// SEH exception.  (Microsoft compilers cannot handle SEH and C++
+// exceptions in the same function.  Therefore, we provide a separate
+// wrapper function for handling SEH exceptions.)
+template <class T, typename Result>
+Result HandleSehExceptionsInMethodIfSupported(
     T* object, Result (T::*method)(), const char* location) {
 #if GTEST_HAS_SEH
   __try {
@@ -2407,8 +2437,66 @@ Result HandleSehExceptionsInMethodIfSupported(
 // exceptions, if they are supported; returns the 0-value for type
 // Result in case of an SEH exception.
 template <class T, typename Result>
-Result HandleExceptionsInMethodIfSupported(
-    T* object, Result (T::*method)(), const char* location) {
+Result
+HandleExceptionsInMethodIfSupported(T *object,
+                                    Result (T::*method)(const TestInfo *),
+                                    const TestInfo *ti, const char *location) {
+  // NOTE: The user code can affect the way in which Google Test handles
+  // exceptions by setting GTEST_FLAG(catch_exceptions), but only before
+  // RUN_ALL_TESTS() starts. It is technically possible to check the flag
+  // after the exception is caught and either report or re-throw the
+  // exception based on the flag's value:
+  //
+  // try {
+  //   // Perform the test method.
+  // } catch (...) {
+  //   if (GTEST_FLAG(catch_exceptions))
+  //     // Report the exception as failure.
+  //   else
+  //     throw;  // Re-throws the original exception.
+  // }
+  //
+  // However, the purpose of this flag is to allow the program to drop into
+  // the debugger when the exception is thrown. On most platforms, once the
+  // control enters the catch block, the exception origin information is
+  // lost and the debugger will stop the program at the point of the
+  // re-throw in this function -- instead of at the point of the original
+  // throw statement in the code under test.  For this reason, we perform
+  // the check early, sacrificing the ability to affect Google Test's
+  // exception handling in the method where the exception is thrown.
+  if (internal::GetUnitTestImpl()->catch_exceptions()) {
+#if GTEST_HAS_EXCEPTIONS
+    try {
+      return HandleSehExceptionsInMethodIfSupported(object, method, ti, location);
+    } catch (const internal::GoogleTestFailureException&) {  // NOLINT
+      // This exception type can only be thrown by a failed Google
+      // Test assertion with the intention of letting another testing
+      // framework catch it.  Therefore we just re-throw it.
+      throw;
+    } catch (const std::exception& e) {  // NOLINT
+      internal::ReportFailureInUnknownLocation(
+          TestPartResult::kFatalFailure,
+          FormatCxxExceptionMessage(e.what(), location));
+    } catch (...) {  // NOLINT
+      internal::ReportFailureInUnknownLocation(
+          TestPartResult::kFatalFailure,
+          FormatCxxExceptionMessage(NULL, location));
+    }
+    return static_cast<Result>(0);
+#else
+    return HandleSehExceptionsInMethodIfSupported(object, method, location);
+#endif  // GTEST_HAS_EXCEPTIONS
+  } else {
+    return (object->*method)(ti);
+  }
+}
+
+// Runs the given method and catches and reports C++ and/or SEH-style
+// exceptions, if they are supported; returns the 0-value for type
+// Result in case of an SEH exception.
+template <class T, typename Result>
+Result HandleExceptionsInMethodIfSupported(T *object, Result (T::*method)(),
+                                           const char *location) {
   // NOTE: The user code can affect the way in which Google Test handles
   // exceptions by setting GTEST_FLAG(catch_exceptions), but only before
   // RUN_ALL_TESTS() starts. It is technically possible to check the flag
@@ -2462,12 +2550,13 @@ Result HandleExceptionsInMethodIfSupported(
 }  // namespace internal
 
 // Runs the test and updates the test result.
-void Test::Run() {
+void Test::Run(const TestInfo* ti) {
   if (!HasSameFixtureClass()) return;
 
   internal::UnitTestImpl* const impl = internal::GetUnitTestImpl();
   impl->os_stack_trace_getter()->UponLeavingGTest();
-  internal::HandleExceptionsInMethodIfSupported(this, &Test::SetUp, "SetUp()");
+  internal::HandleExceptionsInMethodIfSupported(this, &Test::SetUp, ti,
+                                                "SetUp()");
   // We will run the test only if SetUp() was successful.
   if (!HasFatalFailure()) {
     impl->os_stack_trace_getter()->UponLeavingGTest();
@@ -2653,7 +2742,7 @@ void TestInfo::Run() {
   if ((test != NULL) && !Test::HasFatalFailure()) {
     // This doesn't throw as all user code that can throw are wrapped into
     // exception handling code.
-    test->Run();
+    test->Run(this);
   }
 
   // Deletes the test object.
