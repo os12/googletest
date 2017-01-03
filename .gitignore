@@ -1,2 +1,4 @@
 # Ignore CI build directory
 build/
+/googletest/msvc/x64/Debug
+/googletest/msvc/x64/Release
