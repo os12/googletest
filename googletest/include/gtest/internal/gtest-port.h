@@ -673,10 +673,8 @@ struct _RTL_CRITICAL_SECTION;
 // To avoid conditional compilation everywhere, we make it
 // gtest-port.h's responsibility to #include the header implementing
 // tuple.
-#if GTEST_HAS_STD_TUPLE_
 # include <tuple>  // IWYU pragma: export
 # define GTEST_TUPLE_NAMESPACE_ ::std
-#endif  // GTEST_HAS_STD_TUPLE_
 
 // We include tr1::tuple even if std::tuple is available to define printers for
 // them.
